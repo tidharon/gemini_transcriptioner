@@ -755,16 +755,21 @@ def run_transcription_app():
 
     remember_me = st.sidebar.checkbox("זכור אותי", value=st.session_state.get('remember_me', False))
 
-    # שמירה בזיכרון המקומי בשינוי
+    # שמירה בזיכרון המקומי בשינו
     if remember_me:
-        streamlit_js_eval.run_js(f"""
-        saveToLocalStorage(true, '{api_key}', '{projects}');
-        """)
+        # ניתן להעביר רשימת ביטויים לביצוע
+        streamlit_js_eval.streamlit_js_eval(js_expressions=[
+            f"localStorage.setItem('remember_me', 'true')",
+            f"localStorage.setItem('api_key', '{api_key}')",
+            f"localStorage.setItem('projects', '{projects}')"
+        ])
     else:
-        streamlit_js_eval.run_js("""
-        saveToLocalStorage(false, '', '');
-        """)
-
+        streamlit_js_eval.streamlit_js_eval(js_expressions=[
+            "localStorage.removeItem('remember_me')",
+            "localStorage.removeItem('api_key')",
+            "localStorage.removeItem('projects')"
+        ])
+        
     # עדכון מצב התזרים
     st.session_state.api_key = api_key
     st.session_state.projects = projects
