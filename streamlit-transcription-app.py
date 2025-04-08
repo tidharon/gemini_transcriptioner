@@ -726,15 +726,15 @@ def run_transcription_app():
     
     # ניסיון לטעון נתונים שמורים
    # ניסיון לטעון נתונים שמורים באמצעות eval_js
-    remember_me_js = streamlit_js_eval(js_expressions="localStorage.getItem('remember_me')")
+    remember_me_js = streamlit_js_eval.streamlit_js_eval(js_expressions="localStorage.getItem('remember_me')")
         
     if 'remember_me' not in st.session_state:
         st.session_state.remember_me = False
         
     if remember_me_js == 'true':
         st.session_state.remember_me = True
-        api_key_js = streamlit_js_eval(js_expressions="localStorage.getItem('api_key')")
-        projects_js = streamlit_js_eval(js_expressions="localStorage.getItem('projects')")
+        api_key_js = streamlit_js_eval.streamlit_js_eval(js_expressions="localStorage.getItem('api_key')")
+        projects_js = streamlit_js_eval.streamlit_js_eval(js_expressions="localStorage.getItem('projects')")
         
         if api_key_js:
             st.session_state.api_key = api_key_js
