@@ -725,7 +725,7 @@ def run_transcription_app():
     st.sidebar.header("הגדרות תמלול")
     
     # ניסיון לטעון נתונים שמורים
-    stored_values = streamlit_js_eval.get_browser_data('localStorage')
+    stored_values = streamlit_js_eval.get_localStorage()
     remember_me = st.session_state.get('remember_me', False)
 
     if 'remember_me' not in st.session_state:
@@ -767,10 +767,6 @@ def run_transcription_app():
     st.session_state.projects = projects
     st.session_state.remember_me = remember_me
 
-    # הגדרות API
-    api_key = st.sidebar.text_input("מפתח API של Google AI Studio", type="password")
-    projects = st.sidebar.text_input("מזהי פרויקטים של Google Cloud (מופרדים בפסיקים)", 
-                                     value="project-1,project-2")
     model = st.sidebar.selectbox("מודל Google AI", 
                                 ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"], 
                                 index=0)
