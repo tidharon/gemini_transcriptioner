@@ -1,3 +1,4 @@
 streamlit
 pydub
 requests
+streamlit_js_eval
