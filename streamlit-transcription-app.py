@@ -12,6 +12,7 @@ from io import BytesIO
 import tempfile
 import threading
 import re
+import streamlit_js_eval
 
 # הגדרת הכותרת וסגנון האפליקציה
 st.set_page_config(
@@ -47,7 +48,81 @@ st.markdown("""
     .stButton button {
         float: right;
     }
+    /* הסתרת כפתור הפתיחה המקורי של הסרגל */
+    [data-testid="collapsedControl"] {
+        display: none !important;
+    }
+    
+    /* יצירת כפתור חדש בצד ימין */
+    .sidebar-toggle {
+        position: fixed;
+        top: 50%;
+        right: 0;
+        transform: translateY(-50%);
+        background-color: #4e8cff;
+        color: white;
+        border: none;
+        border-radius: 4px 0 0 4px;
+        padding: 10px 5px;
+        cursor: pointer;
+        z-index: 1000;
+        box-shadow: -2px 0 5px rgba(0,0,0,0.2);
+    }
+    
+    /* עיצוב החץ */
+    .sidebar-toggle-icon {
+        display: inline-block;
+        width: 0;
+        height: 0;
+        border-top: 6px solid transparent;
+        border-bottom: 6px solid transparent;
+        border-right: 6px solid white;
+    }
+    
+    /* היפוך החץ כאשר הסרגל פתוח */
+    .sidebar-open .sidebar-toggle-icon {
+        border-right: none;
+        border-left: 6px solid white;
+    }
+    
+    /* התאמת שולי התוכן הראשי */
+    .main-content {
+        transition: margin-right 0.3s;
+    }
+    
+    /* התאמת שולי התוכן כאשר הסרגל פתוח */
+    .sidebar-open .main-content {
+        margin-right: 260px;
+    }
 </style>
+            
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // יצירת כפתור חדש
+    const sidebarToggle = document.createElement('button');
+    sidebarToggle.className = 'sidebar-toggle';
+    sidebarToggle.innerHTML = '<span class="sidebar-toggle-icon"></span>';
+    document.body.appendChild(sidebarToggle);
+    
+    // הוספת האזנה ללחיצה
+    sidebarToggle.addEventListener('click', function() {
+        // מציאת כפתור הסרגל המקורי ולחיצה עליו באופן תכנותי
+        const originalToggle = document.querySelector('[data-testid="collapsedControl"]');
+        if (originalToggle) {
+            originalToggle.click();
+        }
+        
+        // עדכון סטייל החץ
+        document.body.classList.toggle('sidebar-open');
+    });
+    
+    // בדיקה אם הסרגל פתוח בטעינה
+    const sidebarExpanded = document.querySelector('.stSidebar').style.width !== '0px';
+    if (sidebarExpanded) {
+        document.body.classList.add('sidebar-open');
+    }
+});
+</script>
 """, unsafe_allow_html=True)
 
 class TokenUsageManager:
@@ -332,6 +407,27 @@ def process_audio(uploaded_file, api_key, projects, model, segment_length, overl
             return None
 
 
+# הוספת פונקציה חדשה ליצירת פרומפט אחיד
+def create_unified_prompt(base_prompt, segment_index, total_segments, is_processing=False):
+    """יצירת פרומפט אחיד לכל שלבי התהליך - תמלול ועיבוד"""
+    
+    prompt = base_prompt
+
+    # הוספת מידע על המיקום של המקטע
+    if segment_index == 0:
+        prompt += "\n\nזהו החלק הראשון של השיעור."
+    elif segment_index == total_segments - 1:
+        prompt += f"\n\nזהו החלק האחרון של השיעור (חלק {segment_index+1} מתוך {total_segments})."
+    else:
+        prompt += f"\n\nזהו חלק אמצעי של השיעור (חלק {segment_index+1} מתוך {total_segments})."
+    
+    # אם זה עבור שלב העיבוד, הוסף הנחיה ספציפית לעיבוד
+    if is_processing:
+        prompt += "\n\nנא לעבד את הטקסט הגולמי לתמלול נקי ומדויק תוך שמירה קפדנית על כל ההנחיות לעיל."
+    
+    return prompt
+
+# עדכון בפונקציה process_segments:
 def process_segments(api_key, model, token_manager, project_ids, segments, temp_dir, 
                     custom_prompt, progress_bar, status_text, num_segments):
     """עיבוד כל מקטע אודיו באמצעות תמלול ועיבוד LLM."""
@@ -385,6 +481,24 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
         # שימוש בפרומפט מותאם אישית
         base_transcription_prompt = custom_prompt
     
+    # בחירת פרויקט אחד לכל התהליך להבטחת עקביות
+    primary_project = token_manager.get_available_project(project_ids)
+    if not primary_project:
+        status_text.error("לא נמצאו פרויקטים עם מכסת טוקנים זמינה. נסה שוב מחר.")
+        return None
+    
+    status_text.info(f"משתמש בפרויקט {primary_project} באופן עקבי לכל התהליך")
+    
+    # יצירת קובץ לוג לתיעוד הפרומפטים
+    log_file = os.path.join(temp_dir, "prompts_log.txt")
+    
+    # פונקציה לתיעוד הפרומפטים
+    def log_prompt(segment_num, prompt_type, prompt_text):
+        with open(log_file, "a", encoding="utf-8") as f:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{timestamp}] --- מקטע {segment_num} - {prompt_type} ---\n")
+            f.write(prompt_text + "\n\n")
+    
     processed_transcriptions = []
     
     for i, segment_file in enumerate(segments):
@@ -399,14 +513,8 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
                 raw_text = f.read()
             status_text.info(f"  משתמש בתמלול גולמי קיים: {len(raw_text)} תווים")
         else:
-            # מציאת פרויקט זמין לתמלול
-            project_id = token_manager.get_available_project(project_ids)
-            if not project_id:
-                status_text.error("לא נמצאו פרויקטים עם מכסת טוקנים זמינה. נסה שוב מחר.")
-                return None
-            
             try:
-                status_text.info(f"  משתמש בפרויקט {project_id} לתמלול")
+                status_text.info(f"  משתמש בפרויקט {primary_project} לתמלול")
                 
                 # טעינת קובץ אודיו
                 with open(segment_file, "rb") as audio_file:
@@ -416,14 +524,13 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
                 file_size = len(audio_content)
                 status_text.info(f"  גודל קובץ אודיו: {file_size / 1024 / 1024:.2f} MB")
                 
-                # התאמת הפרומפט למקטע ספציפי
-                segment_prompt = base_transcription_prompt
-                if i == 0:
-                    segment_prompt += "\n\nזהו החלק הראשון של ההקלטה."
-                elif i == len(segments) - 1:
-                    segment_prompt += f"\n\nזהו החלק האחרון של ההקלטה (חלק {i+1} מתוך {len(segments)})."
-                else:
-                    segment_prompt += f"\n\nזהו חלק אמצעי של ההקלטה (חלק {i+1} מתוך {len(segments)})."
+                # יצירת פרומפט אחיד לתמלול
+                transcription_prompt = create_unified_prompt(
+                    base_transcription_prompt, i, len(segments), is_processing=False
+                )
+                
+                # תיעוד הפרומפט
+                log_prompt(i+1, "פרומפט תמלול", transcription_prompt)
                 
                 # עדכון מד התקדמות
                 segment_progress_base = 1/3  # החלק הראשון של התהליך (חלוקה) הושלם
@@ -431,14 +538,14 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
                 progress_bar.progress(segment_progress, text=f"מתמלל מקטע {i+1}/{len(segments)}...")
                 
                 # קריאה ל-API של Gemini עם קובץ האודיו כנספח
-                raw_text = transcribe_with_gemini(api_key, model, segment_prompt, audio_content, progress_bar)
+                raw_text = transcribe_with_gemini(api_key, model, transcription_prompt, audio_content, progress_bar)
                 
                 # אומדן טוקנים על סמך משך האודיו (אומדן גס)
                 segment_duration_seconds = len(AudioSegment.from_mp3(segment_file)) / 1000
                 estimated_tokens = int(segment_duration_seconds * 5)  # אומדן גס: 5 טוקנים לשנייה
                 
                 # רישום שימוש בטוקנים
-                token_manager.record_usage(project_id, estimated_tokens)
+                token_manager.record_usage(primary_project, estimated_tokens)
                 
                 # שמירת התמלול הגולמי
                 with open(raw_file, "w", encoding="utf-8") as f:
@@ -463,42 +570,22 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
                 processed_text = f.read()
             status_text.info(f"  משתמש בתמלול מעובד קיים: {len(processed_text)} תווים")
         else:
-            # מציאת פרויקט זמין ליצירת טקסט
-            project_id = token_manager.get_available_project(project_ids)
-            if not project_id:
-                status_text.error("לא נמצאו פרויקטים עם מכסת טוקנים זמינה. נסה שוב מחר.")
-                return None
-            
             try:
-                status_text.info(f"  משתמש בפרויקט {project_id} לעיבוד טקסט עם מודל: {model}")
+                status_text.info(f"  משתמש בפרויקט {primary_project} לעיבוד טקסט עם מודל: {model}")
                 
-                # יצירת הודעת מערכת ספציפית למקטע - פשוט יותר כעת ללא מבנה פורמלי
-                if i == 0:
-                    # מקטע ראשון
-                    system_message = (
-                        f"{base_transcription_prompt}\n\n"
-                        f"זהו החלק הראשון של השיעור. עבד את הטקסט הגולמי לתמלול נקי ומדויק."
-                    )
-                elif i == len(segments) - 1:
-                    # מקטע אחרון
-                    system_message = (
-                        f"{base_transcription_prompt}\n\n"
-                        f"זהו החלק האחרון של השיעור (חלק {i+1} מתוך {len(segments)}). "
-                        f"עבד את הטקסט הגולמי לתמלול נקי ומדויק."
-                    )
-                else:
-                    # מקטע אמצעי
-                    system_message = (
-                        f"{base_transcription_prompt}\n\n"
-                        f"זהו חלק אמצעי של השיעור (חלק {i+1} מתוך {len(segments)}). "
-                        f"עבד את הטקסט הגולמי לתמלול נקי ומדויק."
-                    )
+                # יצירת פרומפט אחיד לעיבוד - אותו פרומפט בסיסי עם תוספת הנחיות עיבוד
+                processing_prompt = create_unified_prompt(
+                    base_transcription_prompt, i, len(segments), is_processing=True
+                )
                 
-                # הכנת הפרומפט
-                prompt = f"{system_message}\n\nטקסט גולמי לעיבוד:\n{raw_text}"
+                # תיעוד הפרומפט
+                log_prompt(i+1, "פרומפט עיבוד", processing_prompt)
+                
+                # הכנת הפרומפט המלא כולל הטקסט הגולמי
+                full_prompt = f"{processing_prompt}\n\nטקסט גולמי לעיבוד:\n{raw_text}"
                 
                 # אומדן ספירת טוקנים (אומדן גס: 1.5 טוקנים לתו)
-                estimated_input_tokens = int(len(prompt) * 1.5)
+                estimated_input_tokens = int(len(full_prompt) * 1.5)
                 estimated_output_tokens = int(len(raw_text) * 2)  # פלט עשוי להיות גדול יותר בגלל פורמט
                 estimated_total_tokens = estimated_input_tokens + estimated_output_tokens
                 
@@ -511,7 +598,7 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
                 gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
                 
                 payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
+                    "contents": [{"parts": [{"text": full_prompt}]}],
                     "generationConfig": {
                         "temperature": 0.3,
                         "maxOutputTokens": 8192
@@ -527,7 +614,7 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
                 processed_text = response_data["candidates"][0]["content"]["parts"][0]["text"]
                 
                 # רישום שימוש בטוקנים
-                token_manager.record_usage(project_id, estimated_total_tokens)
+                token_manager.record_usage(primary_project, estimated_total_tokens)
                 
                 # שמירת טקסט מעובד
                 with open(proc_file, "w", encoding="utf-8") as f:
@@ -551,8 +638,13 @@ def process_segments(api_key, model, token_manager, project_ids, segments, temp_
             status_text.info("  השהיה למניעת מגבלות קצב...")
             time.sleep(2)
     
+    # בסיום העיבוד, שמירת סיכום של כל הפרומפטים ששימשו
+    with open(os.path.join(temp_dir, "prompts_summary.txt"), "w", encoding="utf-8") as f:
+        f.write(f"בסיס הפרומפט: {base_transcription_prompt}\n\n")
+        f.write(f"פרויקט בשימוש: {primary_project}\n")
+        f.write(f"מספר מקטעים: {len(segments)}\n")
+    
     return processed_transcriptions
-
 
 def combine_transcriptions(processed_transcriptions, progress_bar, status_text):
     """שילוב תמלולים מעובדים למסמך אחד קוהרנטי."""
@@ -591,9 +683,90 @@ def combine_transcriptions(processed_transcriptions, progress_bar, status_text):
 def run_transcription_app():
     """הפונקציה הראשית להפעלת האפליקציה"""
     
+    st.sidebar.markdown("""
+    <script>
+    // פונקציה לטעינת נתונים מאחסון מקומי
+    function loadFromLocalStorage() {
+        if (localStorage.getItem('remember_me') === 'true') {
+            const api_key = localStorage.getItem('api_key') || '';
+            const projects = localStorage.getItem('projects') || '';
+            
+            // שליחת הערכים למצב התזרים (session)
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                componentName: 'streamlit_js_eval',
+                value: {
+                    api_key: api_key,
+                    projects: projects,
+                    remember_me: true
+                }
+            }, '*');
+        }
+    }
+
+    // פונקציה לשמירת נתונים באחסון מקומי
+    function saveToLocalStorage(remember, api_key, projects) {
+        if (remember) {
+            localStorage.setItem('remember_me', 'true');
+            localStorage.setItem('api_key', api_key);
+            localStorage.setItem('projects', projects);
+        } else {
+            localStorage.removeItem('remember_me');
+            localStorage.removeItem('api_key');
+            localStorage.removeItem('projects');
+        }
+    }
+
+    // טעינת נתונים בעת טעינת הדף
+    document.addEventListener('DOMContentLoaded', loadFromLocalStorage);
+    </script>
+    """, unsafe_allow_html=True)
     # סרגל צד עם הגדרות
     st.sidebar.header("הגדרות תמלול")
     
+    # ניסיון לטעון נתונים שמורים
+    stored_values = streamlit_js_eval.get_browser_data('localStorage')
+    remember_me = st.session_state.get('remember_me', False)
+
+    if 'remember_me' not in st.session_state:
+        st.session_state.remember_me = False
+    
+    if stored_values and 'remember_me' in stored_values and stored_values['remember_me'] == 'true':
+        st.session_state.remember_me = True
+        if 'api_key' in stored_values:
+            st.session_state.api_key = stored_values['api_key']
+        if 'projects' in stored_values:
+            st.session_state.projects = stored_values['projects']
+
+    # הגדרות API
+    api_key = st.sidebar.text_input(
+        "מפתח API של Google AI Studio",
+        type="password",
+        value=st.session_state.get('api_key', '')
+    )
+
+    projects = st.sidebar.text_input(
+        "מזהי פרויקטים של Google Cloud (מופרדים בפסיקים)",
+        value=st.session_state.get('projects', 'project-1,project-2')
+    )
+
+    remember_me = st.sidebar.checkbox("זכור אותי", value=st.session_state.get('remember_me', False))
+
+    # שמירה בזיכרון המקומי בשינוי
+    if remember_me:
+        streamlit_js_eval.run_js(f"""
+        saveToLocalStorage(true, '{api_key}', '{projects}');
+        """)
+    else:
+        streamlit_js_eval.run_js("""
+        saveToLocalStorage(false, '', '');
+        """)
+
+    # עדכון מצב התזרים
+    st.session_state.api_key = api_key
+    st.session_state.projects = projects
+    st.session_state.remember_me = remember_me
+
     # הגדרות API
     api_key = st.sidebar.text_input("מפתח API של Google AI Studio", type="password")
     projects = st.sidebar.text_input("מזהי פרויקטים של Google Cloud (מופרדים בפסיקים)", 
@@ -629,32 +802,32 @@ def run_transcription_app():
         """)
         
         default_prompt = """# תפקידך הוא תמלול מקצועי של שיעורי תורה עם דגש על דיוק בפרטים
-## מטרה
-אתה מתמלל מקצועי המתמחה בתמלול שיעורי תורה בעברית. עליך לייצר טקסט מדויק במיוחד תוך שימוש בהקשר להבנה נכונה של מילים, שמות ומונחים.
+        ## מטרה
+        אתה מתמלל מקצועי המתמחה בתמלול שיעורי תורה בעברית. עליך לייצר טקסט מדויק במיוחד תוך שימוש בהקשר להבנה נכונה של מילים, שמות ומונחים.
 
-## הנחיות לדיוק מבוסס הקשר
-### שמות ומושגים
-- הקדש תשומת לב מיוחדת לשמות של רבנים, פרשנים, ספרים, וחכמי תורה
-- השתמש בהקשר השיעור כדי לזהות נכון שמות ומונחים שנשמעים לא ברורים
-- כשאתה נתקל במילים לא ברורות, התייחס להקשר המשפט, נושא השיחה, והטרמינולוגיה המתאימה
-- היה זהיר במיוחד עם מילים הומופוניות בעברית (מילים שנשמעות דומה) ובחר את המשמעות הנכונה על פי ההקשר
-- עבור מונחים מקצועיים (מונחי הלכה, מושגי ישיבה וכו'), השתמש בידע שלך כדי לזהות אותם במדויק
+        ## הנחיות לדיוק מבוסס הקשר
+        ### שמות ומושגים
+        - הקדש תשומת לב מיוחדת לשמות של רבנים, פרשנים, ספרים, וחכמי תורה
+        - השתמש בהקשר השיעור כדי לזהות נכון שמות ומונחים שנשמעים לא ברורים
+        - כשאתה נתקל במילים לא ברורות, התייחס להקשר המשפט, נושא השיחה, והטרמינולוגיה המתאימה
+        - היה זהיר במיוחד עם מילים הומופוניות בעברית (מילים שנשמעות דומה) ובחר את המשמעות הנכונה על פי ההקשר
+        - עבור מונחים מקצועיים (מונחי הלכה, מושגי ישיבה וכו'), השתמש בידע שלך כדי לזהות אותם במדויק
 
-### דיוק בציטוטים מהמקורות
-- היה מדויק במיוחד בציטוטי פסוקים מהתנ"ך
-- הקפד על דיוק בציטוטים מחז"ל, גמרא, משנה והלכה
-- סמן ציטוטים במירכאות ותקן שגיאות קלות בציטוט אם ישנן
+        ### דיוק בציטוטים מהמקורות
+        - היה מדויק במיוחד בציטוטי פסוקים מהתנ"ך
+        - הקפד על דיוק בציטוטים מחז"ל, גמרא, משנה והלכה
+        - סמן ציטוטים במירכאות ותקן שגיאות קלות בציטוט אם ישנן
 
-### הבחנה בין דוברים
-- הבחן בבירור בין דברי הרב לשאלות הקהל
-- סמן שאלות מהקהל בפורמט: [שאלה מהקהל]: תוכן השאלה
-- סמן את תשובת הרב בפורמט: [הרב]: תוכן התשובה
+        ### הבחנה בין דוברים
+        - הבחן בבירור בין דברי הרב לשאלות הקהל
+        - סמן שאלות מהקהל בפורמט: [שאלה מהקהל]: תוכן השאלה
+        - סמן את תשובת הרב בפורמט: [הרב]: תוכן התשובה
 
-## מה לא לעשות
-- אל תנחש שמות או מונחים כשאתה לא בטוח, במקום זאת השתמש בהקשר להבנה טובה יותר
-- אל תוסיף פרשנות או הסברים משלך
-- אל תשנה את סגנון הדיבור של הרב
-"""
+        ## מה לא לעשות
+        - אל תנחש שמות או מונחים כשאתה לא בטוח, במקום זאת השתמש בהקשר להבנה טובה יותר
+        - אל תוסיף פרשנות או הסברים משלך
+        - אל תשנה את סגנון הדיבור של הרב
+        """
         
         custom_prompt = st.text_area("הכנס פרומפט מותאם אישית", 
                                     value=default_prompt, 
@@ -699,6 +872,19 @@ def run_transcription_app():
                         file_name=f"{uploaded_file.name.split('.')[0]}_transcription.txt",
                         mime="text/plain"
                     )
+
+    # הוספת חותמת בתחתית העמוד
+    st.markdown("---")
+    st.markdown(
+        """
+        <div style="text-align: center; margin-top: 30px; margin-bottom: 10px; direction: rtl;">
+            <p style="color: #555; font-size: 0.9em; font-weight: bold;">
+                נבנה באהבת תורה ע"י Studio TASH לישיבת שירת משה יפו
+            </p>
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
     run_transcription_app()
