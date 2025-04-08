@@ -725,18 +725,21 @@ def run_transcription_app():
     st.sidebar.header("הגדרות תמלול")
     
     # ניסיון לטעון נתונים שמורים
-    stored_values = streamlit_js_eval.get_localStorage()
-    remember_me = st.session_state.get('remember_me', False)
-
+   # ניסיון לטעון נתונים שמורים באמצעות eval_js
+    remember_me_js = streamlit_js_eval.eval_js("localStorage.getItem('remember_me')")
+        
     if 'remember_me' not in st.session_state:
         st.session_state.remember_me = False
-    
-    if stored_values and 'remember_me' in stored_values and stored_values['remember_me'] == 'true':
+        
+    if remember_me_js == 'true':
         st.session_state.remember_me = True
-        if 'api_key' in stored_values:
-            st.session_state.api_key = stored_values['api_key']
-        if 'projects' in stored_values:
-            st.session_state.projects = stored_values['projects']
+        api_key_js = streamlit_js_eval.eval_js("localStorage.getItem('api_key')")
+        projects_js = streamlit_js_eval.eval_js("localStorage.getItem('projects')")
+        
+        if api_key_js:
+            st.session_state.api_key = api_key_js
+        if projects_js:
+            st.session_state.projects = projects_js
 
     # הגדרות API
     api_key = st.sidebar.text_input(
